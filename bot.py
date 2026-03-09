@@ -9,7 +9,8 @@ CONTACT_NAME,VCF_NAME,PER_FILE,FILE_COUNT,TXT_FILE=range(5)
 menu=ReplyKeyboardMarkup(
 [
 ["TXT ➜ VCF","VCF ➜ TXT"],
-["Numbers ➜ VCF"]
+["Numbers ➜ VCF"],
+["Back to Menu"]
 ],
 resize_keyboard=True
 )
@@ -208,21 +209,41 @@ async def deny(update,context):
 
 app=ApplicationBuilder().token(config.TOKEN).build()
 
-conv=ConversationHandler(
+async def back_menu(update, context):
+    await update.message.reply_text(
+        "Main Menu",
+        reply_markup=menu
+    )
+    return ConversationHandler.END
 
-entry_points=[MessageHandler(filters.Regex("TXT ➜ VCF"),txt_start)],
 
-states={
-
-CONTACT_NAME:[MessageHandler(filters.TEXT,contact_name)],
-VCF_NAME:[MessageHandler(filters.TEXT,vcf_name)],
-PER_FILE:[MessageHandler(filters.TEXT,per_file)],
-FILE_COUNT:[MessageHandler(filters.TEXT,file_count)],
-TXT_FILE:[MessageHandler(filters.Document.ALL,generate)]
-
-},
-
-fallbacks=[]
+conv = ConversationHandler(
+    entry_points=[MessageHandler(filters.Regex("TXT ➜ VCF"), txt_start)],
+    states={
+        CONTACT_NAME: [
+            MessageHandler(filters.Regex("🔙 Back to Menu"), back_menu),
+            MessageHandler(filters.TEXT, contact_name)
+        ],
+        VCF_NAME: [
+            MessageHandler(filters.Regex("🔙 Back to Menu"), back_menu),
+            MessageHandler(filters.TEXT, vcf_name)
+        ],
+        PER_FILE: [
+            MessageHandler(filters.Regex("🔙 Back to Menu"), back_menu),
+            MessageHandler(filters.TEXT, per_file)
+        ],
+        FILE_COUNT: [
+            MessageHandler(filters.Regex("🔙 Back to Menu"), back_menu),
+            MessageHandler(filters.TEXT, file_count)
+        ],
+        TXT_FILE: [
+            MessageHandler(filters.Regex("🔙 Back to Menu"), back_menu),
+            MessageHandler(filters.Document.ALL, generate)
+        ]
+    },
+    fallbacks=[
+        MessageHandler(filters.Regex("🔙 Back to Menu"), back_menu)
+    ]
 )
 
 app.add_handler(CommandHandler("start",start))
@@ -231,6 +252,8 @@ app.add_handler(conv)
 app.add_handler(MessageHandler(filters.Regex("VCF ➜ TXT"),vcf_txt))
 app.add_handler(MessageHandler(filters.Document.ALL,vcf_file))
 app.add_handler(MessageHandler(filters.Regex("Numbers ➜ VCF"),numbers))
+
+app.add_handler(MessageHandler(filters.Regex("🔙 Back to Menu"), back_menu))
 
 app.add_handler(CommandHandler("allow",allow))
 app.add_handler(CommandHandler("deny",deny))
