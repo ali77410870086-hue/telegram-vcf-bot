@@ -1,9 +1,5 @@
 import os
-from telegram import (
-    Update,
-    ReplyKeyboardMarkup,
-    InputFile
-)
+from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -14,133 +10,139 @@ from telegram.ext import (
 
 TOKEN = "8728590289:AAGNcv-CPqJ-17xoyBhscU9mBFhJeZRadG8"
 
-# --- START MENU ---
+keyboard = [
+    ["TXT ➝ VCF", "VCF ➝ TXT"],
+    ["Numbers ➝ VCF"]
+]
+reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+# START
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        ["TXT ➜ VCF", "VCF ➜ TXT"],
-        ["Numbers ➜ VCF"]
-    ]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    await update.message.reply_text("Select option:", reply_markup=reply_markup)
 
-    await update.message.reply_text(
-        "📂 Select an option:", reply_markup=reply_markup
-    )
-
-# --- HANDLE MENU ---
-async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# BUTTON HANDLER
+async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
 
-    if text == "TXT ➜ VCF":
+    if text == "TXT ➝ VCF":
+        context.user_data.clear()
         context.user_data["mode"] = "txt_to_vcf"
-        context.user_data["step"] = "ask_split"
-        await update.message.reply_text("How many VCF files do you want?")
+        context.user_data["step"] = "filename"
+        await update.message.reply_text("Enter file name:")
 
-    elif text == "VCF ➜ TXT":
+    elif text == "VCF ➝ TXT":
         context.user_data["mode"] = "vcf_to_txt"
         await update.message.reply_text("Send VCF file")
 
-    elif text == "Numbers ➜ VCF":
+    elif text == "Numbers ➝ VCF":
         context.user_data["mode"] = "num_to_vcf"
         await update.message.reply_text("Send numbers (one per line)")
 
-# --- HANDLE NUMBER INPUT ---
-async def number_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data.get("step") == "ask_split":
-        try:
-            count = int(update.message.text)
-            context.user_data["split_count"] = count
-            context.user_data["step"] = "waiting_txt"
-            await update.message.reply_text("Now send TXT file with numbers.")
-        except:
-            await update.message.reply_text("❌ Send valid number")
+# TEXT HANDLER (STEPS)
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    mode = context.user_data.get("mode")
+    step = context.user_data.get("step")
 
-# --- TXT → MULTIPLE VCF ---
-def split_txt_to_vcf(numbers, parts, base_name="Ali"):
-    chunk_size = len(numbers) // parts
-    files = []
+    # ===== TXT TO VCF STEPS =====
+    if mode == "txt_to_vcf":
 
-    for i in range(parts):
-        start = i * chunk_size
-        end = None if i == parts - 1 else (i + 1) * chunk_size
-        chunk = numbers[start:end]
+        if step == "filename":
+            context.user_data["filename"] = update.message.text
+            context.user_data["step"] = "contactname"
+            await update.message.reply_text("Enter contact name prefix:")
+            return
 
-        filename = f"{base_name}_{i+1}.vcf"
-        with open(filename, "w", encoding="utf-8") as vcf:
-            for j, num in enumerate(chunk):
-                vcf.write("BEGIN:VCARD\nVERSION:3.0\n")
-                vcf.write(f"N:Contact{j}\n")
-                vcf.write(f"TEL:{num}\nEND:VCARD\n")
+        elif step == "contactname":
+            context.user_data["contactname"] = update.message.text
+            context.user_data["step"] = "perfile"
+            await update.message.reply_text("Contacts per file:")
+            return
 
-        files.append(filename)
+        elif step == "perfile":
+            context.user_data["perfile"] = int(update.message.text)
+            context.user_data["step"] = "totalfiles"
+            await update.message.reply_text("Total number of files:")
+            return
 
-    return files
+        elif step == "totalfiles":
+            context.user_data["totalfiles"] = int(update.message.text)
+            context.user_data["step"] = "upload"
+            await update.message.reply_text("Now send TXT file")
+            return
 
-# --- VCF → TXT ---
-def vcf_to_txt(input_file, output_file):
-    numbers = []
-    with open(input_file, "r", encoding="utf-8") as f:
-        for line in f:
-            if line.startswith("TEL"):
-                numbers.append(line.split(":")[1].strip())
+    # ===== NUMBERS TO VCF =====
+    elif mode == "num_to_vcf":
+        numbers = update.message.text.splitlines()
 
-    with open(output_file, "w", encoding="utf-8") as f:
-        f.write("\n".join(numbers))
+        with open("numbers.vcf", "w") as vcf:
+            for i, num in enumerate(numbers):
+                vcf.write(f"BEGIN:VCARD\nVERSION:3.0\nFN:Contact{i}\nTEL:{num}\nEND:VCARD\n")
 
-# --- FILE HANDLER ---
-async def file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await update.message.reply_document(open("numbers.vcf", "rb"))
+
+# FILE HANDLER
+async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mode = context.user_data.get("mode")
 
     file = await update.message.document.get_file()
-    input_path = f"{update.message.chat_id}_input.txt"
-    await file.download_to_drive(input_path)
+    file_path = update.message.document.file_name
+    await file.download_to_drive(file_path)
 
-    # --- TXT TO MULTIPLE VCF ---
-    if mode == "txt_to_vcf" and context.user_data.get("step") == "waiting_txt":
-        with open(input_path, "r") as f:
-            numbers = [line.strip() for line in f if line.strip()]
+    # ===== TXT ➝ VCF ADVANCED =====
+    if mode == "txt_to_vcf":
+        with open(file_path, "r") as f:
+            numbers = f.read().splitlines()
 
-        parts = context.user_data.get("split_count", 1)
-        files = split_txt_to_vcf(numbers, parts)
+        filename = context.user_data["filename"]
+        cname = context.user_data["contactname"]
+        per_file = context.user_data["perfile"]
+        total_files = context.user_data["totalfiles"]
 
-        for fpath in files:
-            await update.message.reply_document(InputFile(fpath))
-            os.remove(fpath)
+        index = 0
 
-    # --- VCF TO TXT ---
+        for file_no in range(total_files):
+            vcf_name = f"{filename}_{file_no+1}.vcf"
+
+            with open(vcf_name, "w") as vcf:
+                for i in range(per_file):
+                    if index >= len(numbers):
+                        break
+
+                    num = numbers[index]
+                    vcf.write(
+                        f"BEGIN:VCARD\nVERSION:3.0\nFN:{cname}{index+1}\nTEL:{num}\nEND:VCARD\n"
+                    )
+                    index += 1
+
+            await update.message.reply_document(open(vcf_name, "rb"))
+            os.remove(vcf_name)
+            # ===== VCF ➝ TXT =====
     elif mode == "vcf_to_txt":
-        output = "output.txt"
-        vcf_to_txt(input_path, output)
-        await update.message.reply_document(InputFile(output))
-        os.remove(output)
+        numbers = []
+        with open(file_path, "r") as f:
+            for line in f:
+                if line.startswith("TEL"):
+                    numbers.append(line.split(":")[1].strip())
 
-    os.remove(input_path)
+        with open("output.txt", "w") as txt:
+            txt.write("\n".join(numbers))
 
-# --- TEXT HANDLER (Numbers → VCF) ---
-async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data.get("mode") == "num_to_vcf":
-        numbers = update.message.text.splitlines()
-        filename = "numbers.vcf"
-        with open(filename, "w", encoding="utf-8") as vcf:
-            for i, num in enumerate(numbers):
-                vcf.write("BEGIN:VCARD\nVERSION:3.0\n")
-                vcf.write(f"N:Contact{i}\n")
-                vcf.write(f"TEL:{num}\nEND:VCARD\n")
+        await update.message.reply_document(open("output.txt", "rb"))
+        os.remove("output.txt")
 
-        await update.message.reply_document(InputFile(filename))
-        os.remove(filename)
+    os.remove(file_path)
 
-# --- MAIN ---
+# MAIN
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu_handler))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^\d+$'), number_handler))
-    app.add_handler(MessageHandler(filters.Document.ALL, file_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_buttons))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
 
     print("Bot running...")
     app.run_polling()
 
-if __name__ == "__main__":
+if name == "main":
     main()
