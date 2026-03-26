@@ -1,35 +1,38 @@
 import os
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler,
-    ContextTypes, filters, ConversationHandler
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+    ConversationHandler,
 )
 
 TOKEN = "8728590289:AAGNcv-CPqJ-17xoyBhscU9mBFhJeZRadG8"
 
+# States
 (
     MENU,
     TXT_FILE,
-    ASK_VCF_COUNT,
-    ASK_CONTACTS_PER_FILE,
-    ASK_CONTACT_NAME,
+    ASK_NAME,
+    ASK_PER_FILE,
+    ASK_TOTAL_FILE,
     ASK_VCF_NAME,
-    PROCESS_TXT,
     VCF_TO_TXT,
     NUMBERS_TO_VCF,
+    ADMIN_NUMBERS,
     ADMIN_NAME,
     ADMIN_VCF_NAME,
-    NAVY_NAME,
-    NAVY_VCF_NAME
-) = range(13)
+) = range(11)
 
+# Keyboards
 main_menu = ReplyKeyboardMarkup(
     [
         ["TXT ➜ VCF", "VCF ➜ TXT"],
-        ["Numbers ➜ VCF"],
-        ["Admin VCF", "Navy VCF"]
+        ["Numbers ➜ VCF", "Admin / Navy VCF"],
     ],
-    resize_keyboard=True
+    resize_keyboard=True,
 )
 
 back_btn = ReplyKeyboardMarkup([["🔙 Back"]], resize_keyboard=True)
@@ -61,21 +64,22 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return VCF_TO_TXT
 
     elif text == "Numbers ➜ VCF":
-        await update.message.reply_text("Send numbers", reply_markup=back_btn)
+        await update.message.reply_text(
+            "Send numbers (comma or line)", reply_markup=back_btn
+        )
         return NUMBERS_TO_VCF
 
-    elif text == "Admin VCF":
-        await update.message.reply_text("Enter Admin Name:", reply_markup=back_btn)
-        return ADMIN_NAME
-
-    elif text == "Navy VCF":
-        await update.message.reply_text("Enter Navy Name:", reply_markup=back_btn)
-        return NAVY_NAME
+    elif text == "Admin / Navy VCF":
+        await update.message.reply_text(
+            "Send numbers for admin VCF", reply_markup=back_btn
+        )
+        return ADMIN_NUMBERS
 
     return MENU
 
 
-# TXT FLOW
+# ================= TXT ➜ VCF FLOW =================
+
 async def txt_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "🔙 Back":
         return await back(update, context)
@@ -86,112 +90,77 @@ async def txt_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with open("numbers.txt") as f:
         context.user_data["numbers"] = f.read().splitlines()
 
-    await update.message.reply_text("How many VCF files?", reply_markup=back_btn)
-    return ASK_VCF_COUNT
+    await update.message.reply_text("Enter contact name prefix:", reply_markup=back_btn)
+    return ASK_NAME
 
 
-async def ask_vcf_count(update: Update, context):
+async def ask_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "🔙 Back":
         return await back(update, context)
 
-    context.user_data["vcf_count"] = int(update.message.text)
-    await update.message.reply_text("Contacts per file?")
-    return ASK_CONTACTS_PER_FILE
-
-
-async def ask_contacts(update: Update, context):
-    context.user_data["per_file"] = int(update.message.text)
-    await update.message.reply_text("Contact name prefix?")
-    return ASK_CONTACT_NAME
-
-
-async def ask_name(update: Update, context):
     context.user_data["name"] = update.message.text
-    await update.message.reply_text("VCF file name?")
+    await update.message.reply_text("Contacts per VCF file:", reply_markup=back_btn)
+    return ASK_PER_FILE
+
+
+async def ask_per_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == "🔙 Back":
+        return await back(update, context)
+
+    context.user_data["per_file"] = int(update.message.text)
+    await update.message.reply_text("How many VCF files:", reply_markup=back_btn)
+    return ASK_TOTAL_FILE
+
+
+async def ask_total(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == "🔙 Back":
+        return await back(update, context)
+
+    context.user_data["total"] = int(update.message.text)
+    await update.message.reply_text("Enter VCF file base name:", reply_markup=back_btn)
     return ASK_VCF_NAME
 
 
-async def generate_vcf(update: Update, context):
+async def generate_vcf(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == "🔙 Back":
+        return await back(update, context)
+
     base_name = update.message.text
     numbers = context.user_data["numbers"]
     per_file = context.user_data["per_file"]
+    total = context.user_data["total"]
     name = context.user_data["name"]
 
-    files = []
-    for i in range(0, len(numbers), per_file):
-        chunk = numbers[i:i+per_file]
-        filename = f"{base_name}_{i//per_file+1}.vcf"
+    index = 0
 
-        with open(filename, "w") as f:
-            for j, num in enumerate(chunk):
-                f.write(f"""BEGIN:VCARD
+    for f_num in range(total):
+        vcf = ""
+        for i in range(per_file):
+            if index >= len(numbers):
+                break
+            num = numbers[index]
+            vcf += f"""BEGIN:VCARD
 VERSION:3.0
-FN:{name} {i+j+1}
+FN:{name} {index+1}
 TEL;TYPE=CELL:{num}
 END:VCARD
-""")
-
-        files.append(filename)
-
-    for file in files:
-        await update.message.reply_document(open(file, "rb"))
-
-    return await back(update, context)
-
-
-# ADMIN VCF
-async def admin_name(update: Update, context):
-    context.user_data["admin"] = update.message.text
-    await update.message.reply_text("Enter VCF name:")
-    return ADMIN_VCF_NAME
-
-
-async def admin_vcf(update: Update, context):
-    vcf_name = update.message.text
-    admin = context.user_data["admin"]
-    content = f"""BEGIN:VCARD
-VERSION:3.0
-FN:{admin} (ADMIN)
-TEL;TYPE=CELL:+0000000000
-END:VCARD
 """
+            index += 1
+            file_name = f"{base_name}_{f_num+1}.vcf"
+        with open(file_name, "w") as f:
+            f.write(vcf)
 
-    file = f"{vcf_name}.vcf"
-    with open(file, "w") as f:
-        f.write(content)
+        await update.message.reply_document(open(file_name, "rb"))
 
-    await update.message.reply_document(open(file, "rb"))
     return await back(update, context)
 
 
-# NAVY VCF
-async def navy_name(update: Update, context):
-    context.user_data["navy"] = update.message.text
-    await update.message.reply_text("Enter VCF name:")
-    return NAVY_VCF_NAME
+# ================= VCF ➜ TXT =================
 
+async def vcf_to_txt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == "🔙 Back":
+        return await back(update, context)
 
-async def navy_vcf(update: Update, context):
-    vcf_name = update.message.text
-    navy = context.user_data["navy"]
-
-    content = f"""BEGIN:VCARD
-VERSION:3.0
-FN:{navy} (NAVY)
-TEL;TYPE=CELL:+0000000000
-END:VCARD
-"""
-
-    file = f"{vcf_name}.vcf"
-    with open(file, "w") as f:
-        f.write(content)
-
-    await update.message.reply_document(open(file, "rb"))
-    return await back(update, context)
-
-
-# VCF ➜ TXT
-async def vcf_to_txt(update: Update, context):
     file = await update.message.document.get_file()
     await file.download_to_drive("contacts.vcf")
 
@@ -208,21 +177,72 @@ async def vcf_to_txt(update: Update, context):
     return await back(update, context)
 
 
-# NUMBERS ➜ VCF
-async def numbers_to_vcf(update: Update, context):
-    text = update.message.text
-    numbers = text.replace(",", "\n").splitlines()
+# ================= NUMBERS ➜ VCF =================
 
-    with open("numbers.vcf", "w") as f:
-        for i, num in enumerate(numbers):
-            f.write(f"""BEGIN:VCARD
+async def numbers_to_vcf(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == "🔙 Back":
+        return await back(update, context)
+
+    nums = update.message.text.replace(",", "\n").splitlines()
+
+    vcf = ""
+    for i, num in enumerate(nums):
+        vcf += f"""BEGIN:VCARD
 VERSION:3.0
-FN:User {i+1}
+FN:Contact {i+1}
 TEL;TYPE=CELL:{num}
 END:VCARD
-""")
+"""
 
-    await update.message.reply_document(open("numbers.vcf", "rb"))
+    with open("contacts.vcf", "w") as f:
+        f.write(vcf)
+
+    await update.message.reply_document(open("contacts.vcf", "rb"))
+    return await back(update, context)
+
+
+# ================= ADMIN / NAVY VCF =================
+
+async def admin_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == "🔙 Back":
+        return await back(update, context)
+
+    context.user_data["admin_nums"] = update.message.text.replace(",", "\n").splitlines()
+
+    await update.message.reply_text("Enter admin name:", reply_markup=back_btn)
+    return ADMIN_NAME
+
+
+async def admin_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == "🔙 Back":
+        return await back(update, context)
+
+    context.user_data["admin_name"] = update.message.text
+    await update.message.reply_text("Enter VCF file name:", reply_markup=back_btn)
+    return ADMIN_VCF_NAME
+
+
+async def admin_vcf(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == "🔙 Back":
+        return await back(update, context)
+
+    file_name = update.message.text + ".vcf"
+    nums = context.user_data["admin_nums"]
+    admin_name = context.user_data["admin_name"]
+
+    vcf = ""
+    for i, num in enumerate(nums):
+        vcf += f"""BEGIN:VCARD
+VERSION:3.0
+FN:{admin_name} {i+1}
+TEL;TYPE=CELL:{num}
+END:VCARD
+"""
+
+    with open(file_name, "w") as f:
+        f.write(vcf)
+
+    await update.message.reply_document(open(file_name, "rb"))
     return await back(update, context)
 
 
@@ -236,19 +256,17 @@ def main():
             MENU: [MessageHandler(filters.TEXT, menu)],
 
             TXT_FILE: [MessageHandler(filters.ALL, txt_file)],
-            ASK_VCF_COUNT: [MessageHandler(filters.TEXT, ask_vcf_count)],
-            ASK_CONTACTS_PER_FILE: [MessageHandler(filters.TEXT, ask_contacts)],
-            ASK_CONTACT_NAME: [MessageHandler(filters.TEXT, ask_name)],
+            ASK_NAME: [MessageHandler(filters.TEXT, ask_name)],
+            ASK_PER_FILE: [MessageHandler(filters.TEXT, ask_per_file)],
+            ASK_TOTAL_FILE: [MessageHandler(filters.TEXT, ask_total)],
             ASK_VCF_NAME: [MessageHandler(filters.TEXT, generate_vcf)],
-
-            ADMIN_NAME: [MessageHandler(filters.TEXT, admin_name)],
-            ADMIN_VCF_NAME: [MessageHandler(filters.TEXT, admin_vcf)],
-
-            NAVY_NAME: [MessageHandler(filters.TEXT, navy_name)],
-            NAVY_VCF_NAME: [MessageHandler(filters.TEXT, navy_vcf)],
 
             VCF_TO_TXT: [MessageHandler(filters.ALL, vcf_to_txt)],
             NUMBERS_TO_VCF: [MessageHandler(filters.TEXT, numbers_to_vcf)],
+
+            ADMIN_NUMBERS: [MessageHandler(filters.TEXT, admin_numbers)],
+            ADMIN_NAME: [MessageHandler(filters.TEXT, admin_name)],
+            ADMIN_VCF_NAME: [MessageHandler(filters.TEXT, admin_vcf)],
         },
         fallbacks=[MessageHandler(filters.TEXT, back)],
     )
