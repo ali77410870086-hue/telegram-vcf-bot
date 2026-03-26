@@ -1,179 +1,158 @@
 import os
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler,
-    ContextTypes, filters, ConversationHandler
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+    ConversationHandler,
 )
 
 TOKEN = "8728590289:AAGNcv-CPqJ-17xoyBhscU9mBFhJeZRadG8"
 
-# STATES
-FILENAME, CNAME, PERFILE, TOTALFILES, WAIT_FILE = range(5)
+# States
+MENU, TXT_TO_VCF, VCF_TO_TXT, NUMBERS_TO_VCF = range(4)
 
-keyboard = [
-    ["TXT ➝ VCF", "VCF ➝ TXT"],
-    ["Numbers ➝ VCF"]
-]
-reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+# Keyboards
+main_menu = ReplyKeyboardMarkup(
+    [["TXT ➜ VCF", "VCF ➜ TXT"], ["Numbers ➜ VCF"]],
+    resize_keyboard=True,
+)
 
+back_btn = ReplyKeyboardMarkup(
+    [["🔙 Back"]],
+    resize_keyboard=True,
+)
 
-# START
+# Start Command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Select option:", reply_markup=reply_markup)
-    return ConversationHandler.END
+    await update.message.reply_text("Choose an option:", reply_markup=main_menu)
+    return MENU
 
 
-# ===== TXT ➝ VCF FLOW =====
+# MENU HANDLER
+async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
 
-async def txt_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Enter file name:")
-    return FILENAME
+    if text == "TXT ➜ VCF":
+        await update.message.reply_text(
+            "Send TXT file with numbers (one per line).", reply_markup=back_btn
+        )
+        return TXT_TO_VCF
 
+    elif text == "VCF ➜ TXT":
+        await update.message.reply_text(
+            "Send VCF file.", reply_markup=back_btn
+        )
+        return VCF_TO_TXT
 
-async def get_filename(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["filename"] = update.message.text
-    await update.message.reply_text("Enter contact name prefix:")
-    return CNAME
+    elif text == "Numbers ➜ VCF":
+        await update.message.reply_text(
+            "Send numbers separated by comma or line.", reply_markup=back_btn
+        )
+        return NUMBERS_TO_VCF
 
-
-async def get_cname(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["cname"] = update.message.text
-    await update.message.reply_text("Contacts per file:")
-    return PERFILE
-
-
-async def get_perfile(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        context.user_data["perfile"] = int(update.message.text)
-        await update.message.reply_text("Total files:")
-        return TOTALFILES
-    except:
-        await update.message.reply_text("❌ Enter valid number")
-        return PERFILE
+    else:
+        return MENU
 
 
-async def get_totalfiles(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        context.user_data["totalfiles"] = int(update.message.text)
-        await update.message.reply_text("Now send TXT file")
-        return WAIT_FILE
-    except:
-        await update.message.reply_text("❌ Enter valid number")
-        return TOTALFILES
+# BACK BUTTON
+async def back(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Back to menu", reply_markup=main_menu)
+    return MENU
 
 
-async def process_txt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# TXT ➜ VCF
+async def txt_to_vcf(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == "🔙 Back":
+        return await back(update, context)
+
     file = await update.message.document.get_file()
-    path = update.message.document.file_name
-    await file.download_to_drive(path)
+    file_path = "numbers.txt"
+    await file.download_to_drive(file_path)
 
-    try:
-        with open(path, "r") as f:
-            numbers = [x.strip() for x in f if x.strip()]
+    with open(file_path, "r") as f:
+        numbers = f.read().splitlines()
 
-        if not numbers:
-            await update.message.reply_text("❌ Empty file")
-            return ConversationHandler.END
+    vcf_content = ""
+    for i, num in enumerate(numbers):
+        vcf_content += f"""BEGIN:VCARD
+VERSION:3.0
+FN:Contact {i+1}
+TEL;TYPE=CELL:{num}
+END:VCARD
+"""
 
-        filename = context.user_data["filename"]
-        cname = context.user_data["cname"]
-        per_file = context.user_data["perfile"]
-        total_files = context.user_data["totalfiles"]
+    with open("contacts.vcf", "w") as f:
+        f.write(vcf_content)
 
-        index = 0
-
-        for file_no in range(total_files):
-            if index >= len(numbers):
-                break
-
-            vcf_name = f"{filename}_{file_no+1}.vcf"
-
-            with open(vcf_name, "w") as vcf:
-                for _ in range(per_file):
-                    if index >= len(numbers):
-                        break
-
-                    num = numbers[index]
-                    vcf.write(
-                        f"BEGIN:VCARD\nVERSION:3.0\nFN:{cname}{index+1}\nTEL:{num}\nEND:VCARD\n"
-                    )
-                    index += 1
-
-            await update.message.reply_document(open(vcf_name, "rb"))
-            os.remove(vcf_name)
-
-        await update.message.reply_text("✅ Done")
-
-    except Exception as e:
-        await update.message.reply_text(f"Error: {e}")
-
-    os.remove(path)
-    return ConversationHandler.END
+    await update.message.reply_document(document=open("contacts.vcf", "rb"))
+    return await back(update, context)
 
 
-# ===== VCF ➝ TXT =====
-
+# VCF ➜ TXT
 async def vcf_to_txt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text == "🔙 Back":
+        return await back(update, context)
+
     file = await update.message.document.get_file()
-    path = update.message.document.file_name
-    await file.download_to_drive(path)
+    file_path = "contacts.vcf"
+    await file.download_to_drive(file_path)
 
     numbers = []
-    with open(path, "r") as f:
+    with open(file_path, "r") as f:
         for line in f:
-            if line.startswith("TEL"):
+            if "TEL" in line:
                 numbers.append(line.split(":")[1].strip())
 
-    with open("output.txt", "w") as txt:
-        txt.write("\n".join(numbers))
+    with open("numbers.txt", "w") as f:
+        f.write("\n".join(numbers))
 
-    await update.message.reply_document(open("output.txt", "rb"))
-
-    os.remove(path)
-    os.remove("output.txt")
+    await update.message.reply_document(document=open("numbers.txt", "rb"))
+    return await back(update, context)
 
 
-# ===== NUMBERS ➝ VCF =====
+# NUMBERS ➜ VCF
 async def numbers_to_vcf(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    numbers = update.message.text.splitlines()
+    if update.message.text == "🔙 Back":
+        return await back(update, context)
 
-    with open("numbers.vcf", "w") as vcf:
-        for i, num in enumerate(numbers):
-            vcf.write(
-                f"BEGIN:VCARD\nVERSION:3.0\nFN:Contact{i+1}\nTEL:{num.strip()}\nEND:VCARD\n"
-            )
+    text = update.message.text
+    numbers = text.replace(",", "\n").splitlines()
 
-    await update.message.reply_document(open("numbers.vcf", "rb"))
-    os.remove("numbers.vcf")
+    vcf_content = ""
+    for i, num in enumerate(numbers):
+        vcf_content += f"""BEGIN:VCARD
+VERSION:3.0
+FN:Contact {i+1}
+TEL;TYPE=CELL:{num}
+END:VCARD
+"""
+
+    with open("contacts.vcf", "w") as f:
+        f.write(vcf_content)
+
+    await update.message.reply_document(document=open("contacts.vcf", "rb"))
+    return await back(update, context)
 
 
-# MAIN
+# MAIN FUNCTION
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
-    # Conversation for TXT ➝ VCF
     conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^TXT ➝ VCF$"), txt_start)],
+        entry_points=[CommandHandler("start", start)],
         states={
-            FILENAME: [MessageHandler(filters.TEXT, get_filename)],
-            CNAME: [MessageHandler(filters.TEXT, get_cname)],
-            PERFILE: [MessageHandler(filters.TEXT, get_perfile)],
-            TOTALFILES: [MessageHandler(filters.TEXT, get_totalfiles)],
-            WAIT_FILE: [MessageHandler(filters.Document.ALL, process_txt)],
+            MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, menu_handler)],
+            TXT_TO_VCF: [MessageHandler(filters.ALL, txt_to_vcf)],
+            VCF_TO_TXT: [MessageHandler(filters.ALL, vcf_to_txt)],
+            NUMBERS_TO_VCF: [MessageHandler(filters.ALL, numbers_to_vcf)],
         },
-        fallbacks=[CommandHandler("start", start)],
+        fallbacks=[MessageHandler(filters.TEXT, back)],
     )
 
-    app.add_handler(CommandHandler("start", start))
     app.add_handler(conv)
-
-    app.add_handler(MessageHandler(filters.Regex("^VCF ➝ TXT$"), start))
-    app.add_handler(MessageHandler(filters.Document.ALL, vcf_to_txt))
-
-    app.add_handler(MessageHandler(filters.Regex("^Numbers ➝ VCF$"), start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, numbers_to_vcf))
-
-    print("Bot Running...")
     app.run_polling()
 
 
