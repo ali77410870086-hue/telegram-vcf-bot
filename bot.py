@@ -1,263 +1,167 @@
-from telegram import Update,ReplyKeyboardMarkup
-from telegram.ext import *
-import config
 import os
-from converter import *
+from telegram import Update, ReplyKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
-CONTACT_NAME,VCF_NAME,PER_FILE,FILE_COUNT,TXT_FILE=range(5)
+TOKEN = "8728590289:AAGNcv-CPqJ-17xoyBhscU9mBFhJeZRadG8"
+ADMIN_ID = 7447021326
+PAYMENT_UID = "1041142293"
+PRICE = "1 USDT"
 
-menu=ReplyKeyboardMarkup(
-[
-["TXT ➜ VCF","VCF ➜ TXT"],
-["Numbers ➜ VCF"],
-["Back to Menu"]
-],
-resize_keyboard=True
-)
+allowed_users = set()
 
-def is_admin(user_id):
-    return user_id in config.ADMINS
+user_steps = {}
 
-
-def is_allowed(user_id):
-
-    if is_admin(user_id):
-        return True
-
-    try:
-        with open(config.USERS_FILE) as f:
-            users=f.read().splitlines()
-
-        return str(user_id) in users
-
-    except:
-        return False
+menu = [["TXT ➜ VCF","VCF ➜ TXT"],["Numbers ➜ VCF"]]
+back = [["Back"]]
 
 
-async def check_access(update):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    user_id=update.effective_user.id
+    user_id = update.message.from_user.id
 
-    if not is_allowed(user_id):
+    if user_id not in allowed_users and user_id != ADMIN_ID:
 
         await update.message.reply_text(
-        "❌ Access denied.\nAsk admin for permission."
+f"""Access Required
+
+Pay {PRICE} to Binance UID:
+{PAYMENT_UID}
+
+After payment send:
+/pay TXID"""
         )
-
-        return False
-
-    return True
-
-
-async def start(update:Update,context:ContextTypes.DEFAULT_TYPE):
-
-    if not config.BOT_STATUS:
-        await update.message.reply_text("Bot is OFF")
-        return
-
-    if not await check_access(update):
         return
 
     await update.message.reply_text(
-    "VCF Converter Bot",
-    reply_markup=menu
-    )
-
-
-async def txt_start(update,context):
-
-    if not await check_access(update):
-        return
-
-    await update.message.reply_text("Enter contact name")
-    return CONTACT_NAME
-
-
-async def contact_name(update,context):
-
-    context.user_data["contact"]=update.message.text
-    await update.message.reply_text("Enter VCF file name")
-
-    return VCF_NAME
-
-
-async def vcf_name(update,context):
-
-    context.user_data["vcfname"]=update.message.text
-    await update.message.reply_text("Contacts per VCF file")
-
-    return PER_FILE
-
-
-async def per_file(update,context):
-
-    context.user_data["perfile"]=int(update.message.text)
-    await update.message.reply_text("How many VCF files")
-
-    return FILE_COUNT
-
-
-async def file_count(update,context):
-
-    context.user_data["count"]=int(update.message.text)
-    await update.message.reply_text("Send TXT file")
-
-    return TXT_FILE
-
-
-async def generate(update,context):
-
-    file=await update.message.document.get_file()
-    await file.download_to_drive("numbers.txt")
-
-    with open("numbers.txt") as f:
-        numbers=f.read().splitlines()
-
-    files=txt_to_vcf(
-    numbers,
-    context.user_data["contact"],
-    context.user_data["vcfname"],
-    context.user_data["perfile"],
-    context.user_data["count"]
-    )
-
-    for f in files:
-        await update.message.reply_document(open(f,"rb"))
-        os.remove(f)
-
-    os.remove("numbers.txt")
-
-    return ConversationHandler.END
-
-
-async def vcf_txt(update,context):
-
-    if not await check_access(update):
-        return
-
-    await update.message.reply_text("Send VCF file")
-
-
-async def vcf_file(update,context):
-
-    file=await update.message.document.get_file()
-    await file.download_to_drive("contacts.vcf")
-
-    txt=vcf_to_txt("contacts.vcf")
-
-    await update.message.reply_document(open(txt,"rb"))
-
-    os.remove("contacts.vcf")
-    os.remove(txt)
-
-
-async def numbers(update,context):
-
-    if not await check_access(update):
-        return
-
-    nums=update.message.text.split()
-
-    vcf=numbers_to_vcf(nums)
-
-    await update.message.reply_document(open(vcf,"rb"))
-
-    os.remove(vcf)
-
-async def allow(update,context):
-
-    if not is_admin(update.effective_user.id):
-        return
-
-    try:
-
-        user=context.args[0]
-
-        with open(config.USERS_FILE,"a") as f:
-            f.write(user+"\n")
-
-        await update.message.reply_text("User allowed")
-
-    except:
-        await update.message.reply_text("Usage: /allow userid")
-
-
-async def deny(update,context):
-
-    if not is_admin(update.effective_user.id):
-        return
-
-    try:
-
-        user=context.args[0]
-
-        with open(config.USERS_FILE) as f:
-            users=f.read().splitlines()
-
-        users=[u for u in users if u!=user]
-
-        with open(config.USERS_FILE,"w") as f:
-            for u in users:
-                f.write(u+"\n")
-
-        await update.message.reply_text("User removed")
-
-    except:
-        await update.message.reply_text("Usage: /deny userid")
-
-
-app=ApplicationBuilder().token(config.TOKEN).build()
-
-async def back_menu(update, context):
-    await update.message.reply_text(
-        "Main Menu",
-        reply_markup=menu
-    )
-    return ConversationHandler.END
-
-
-conv = ConversationHandler(
-    entry_points=[MessageHandler(filters.Regex("TXT ➜ VCF"), txt_start)],
-    states={
-        
-        CONTACT_NAME: [
-            MessageHandler(filters.Regex("🔙 Back to Menu"), back_menu),
-            MessageHandler(filters.TEXT, contact_name)
-        ],
-        VCF_NAME: [
-            MessageHandler(filters.Regex("🔙 Back to Menu"), back_menu),
-            MessageHandler(filters.TEXT, vcf_name)
-        ],
-        PER_FILE: [
-            MessageHandler(filters.Regex("🔙 Back to Menu"), back_menu),
-            MessageHandler(filters.TEXT, per_file)
-        ],
-        FILE_COUNT: [
-            MessageHandler(filters.Regex("🔙 Back to Menu"), back_menu),
-            MessageHandler(filters.TEXT, file_count)
-        ],
-        TXT_FILE: [
-            MessageHandler(filters.Regex("🔙 Back to Menu"), back_menu),
-            MessageHandler(filters.Document.ALL, generate)
-        ]
-    },
-    fallbacks=[
-        MessageHandler(filters.Regex("🔙 Back to Menu"), back_menu)
-    ]
+"Choose option:",
+reply_markup=ReplyKeyboardMarkup(menu,resize_keyboard=True)
 )
 
-app.add_handler(CommandHandler("start",start))
-app.add_handler(conv)
 
-app.add_handler(MessageHandler(filters.Regex("VCF ➜ TXT"),vcf_txt))
-app.add_handler(MessageHandler(filters.Document.ALL,vcf_file))
-app.add_handler(MessageHandler(filters.Regex("Numbers ➜ VCF"),numbers))
+async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-app.add_handler(MessageHandler(filters.Regex("🔙 Back to Menu"), back_menu))
+    txid = " ".join(context.args)
 
-app.add_handler(CommandHandler("allow",allow))
-app.add_handler(CommandHandler("deny",deny))
+    await context.bot.send_message(
+ADMIN_ID,
+f"Payment request\nUser: {update.message.from_user.id}\nTXID: {txid}"
+)
 
-print("Bot Running...")
+    await update.message.reply_text("Payment sent for verification.")
 
-app.run_polling()
+
+async def approve(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if update.message.from_user.id != ADMIN_ID:
+        return
+
+    uid = int(context.args[0])
+
+    allowed_users.add(uid)
+
+    await context.bot.send_message(uid,"Payment verified. Access granted.")
+    await update.message.reply_text("User approved.")
+
+
+async def remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if update.message.from_user.id != ADMIN_ID:
+        return
+
+    uid = int(context.args[0])
+
+    if uid in allowed_users:
+        allowed_users.remove(uid)
+
+    await update.message.reply_text("User removed.")
+
+
+async def users(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if update.message.from_user.id != ADMIN_ID:
+        return
+
+    text = "\n".join(str(u) for u in allowed_users)
+
+    await update.message.reply_text(text if text else "No users")
+
+
+async def adminfile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if update.message.from_user.id != ADMIN_ID:
+        return
+
+    user_steps[ADMIN_ID]={"step":"name"}
+
+    await update.message.reply_text(
+"Enter contact name:",
+reply_markup=ReplyKeyboardMarkup(back,resize_keyboard=True)
+)
+
+
+async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    uid = update.message.from_user.id
+    text = update.message.text
+
+    if text=="Back":
+        user_steps[uid]={}
+        await update.message.reply_text(
+"Menu",
+reply_markup=ReplyKeyboardMarkup(menu,resize_keyboard=True)
+)
+        return
+
+    if uid not in allowed_users and uid!=ADMIN_ID:
+        return
+
+    if uid in user_steps:
+
+        step=user_steps[uid].get("step")
+
+        if step=="name":
+            user_steps[uid]["name"]=text
+            user_steps[uid]["step"]="vcfname"
+            await update.message.reply_text("Enter VCF name")
+            return
+
+        if step=="vcfname":
+            name=user_steps[uid]["name"]
+            filename=text+".vcf"
+
+            with open(filename,"w") as f:
+
+                for i in range(10):
+
+                    f.write(
+f"BEGIN:VCARD\nVERSION:3.0\nFN:{name}{i}\nTEL;TYPE=CELL:900000000{i}\nEND:VCARD\n"
+)
+
+            await update.message.reply_document(open(filename,"rb"))
+            os.remove(filename)
+
+            user_steps[uid]={}                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      
+
+            await update.message.reply_text("Admin VCF created.")
+
+
+def main():
+
+    app = ApplicationBuilder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start",start))
+    app.add_handler(CommandHandler("pay",pay))
+    app.add_handler(CommandHandler("approve",approve))
+    app.add_handler(CommandHandler("remove",remove))
+    app.add_handler(CommandHandler("users",users))
+    app.add_handler(CommandHandler("adminfile",adminfile))
+
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,text_handler))
+
+    print("Bot running")
+
+    app.run_polling()
+
+
+if __name__=="main":
+    main()
