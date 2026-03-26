@@ -1,318 +1,146 @@
-import os
-import zipfile
-from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-)
+from telegram.ext import *
+from telegram import Update
+import config
+from menu import main_menu
+from converter import txt_to_vcf, vcf_to_txt, numbers_to_vcf  # Ensure converter.py exists in the same directory
+from admin import *
 
-TOKEN = "8728590289:AAGNcv-CPqJ-17xoyBhscU9mBFhJeZRadG8"
+CONTACT_NAME,VCF_NAME,PER_FILE,FILE_COUNT,TXT_FILE=range(5)
 
-user_data_store = {}
+async def start(update:Update,context:ContextTypes.DEFAULT_TYPE):
 
-main_menu = [["TXT ➜ VCF", "VCF ➜ TXT"], ["Numbers ➜ VCF"]]
-back_menu = [["Back"]]
-
-
-# START
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    keyboard = ReplyKeyboardMarkup(main_menu, resize_keyboard=True)
+    if not config.BOT_STATUS:
+        await update.message.reply_text("Bot is OFF")
+        return
 
     await update.message.reply_text(
-        "📂 VCF Converter Bot\n\nChoose an option:",
-        reply_markup=keyboard
+    "VCF Converter Bot",
+    reply_markup=main_menu
     )
 
+async def txt_start(update,context):
 
-# TEXT HANDLER
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Enter contact name")
+    return CONTACT_NAME
 
-    user_id = update.message.from_user.id
-    text = update.message.text
 
-    if text == "Back":
+async def contact_name(update,context):
 
-        user_data_store[user_id] = {}
+    context.user_data["contact"]=update.message.text
 
-        keyboard = ReplyKeyboardMarkup(main_menu, resize_keyboard=True)
+    await update.message.reply_text("Enter VCF file name")
+    return VCF_NAME
 
-        await update.message.reply_text("🔙 Back to menu", reply_markup=keyboard)
 
-        return
+async def vcf_name(update,context):
 
+    context.user_data["vcfname"]=update.message.text
 
-    if text == "TXT ➜ VCF":
+    await update.message.reply_text("Contacts per VCF file")
+    return PER_FILE
 
-        user_data_store[user_id] = {"step": "contact_name"}
 
-        await update.message.reply_text(
-            "Enter Contact Name:",
-            reply_markup=ReplyKeyboardMarkup(back_menu, resize_keyboard=True)
-        )
+async def per_file(update,context):
 
-        return
+    context.user_data["perfile"]=int(update.message.text)
 
+    await update.message.reply_text("How many VCF files")
+    return FILE_COUNT
 
-    if text == "VCF ➜ TXT":
 
-        user_data_store[user_id] = {"step": "vcf_to_txt"}
+async def file_count(update,context):
 
-        await update.message.reply_text(
-            "Send VCF file to extract numbers.",
-            reply_markup=ReplyKeyboardMarkup(back_menu, resize_keyboard=True)
-        )
+    context.user_data["count"]=int(update.message.text)
 
-        return
+    await update.message.reply_text("Send TXT file")
+    return TXT_FILE
 
 
-    if text == "Numbers ➜ VCF":
+async def generate(update,context):
 
-        user_data_store[user_id] = {"step": "numbers_vcf_name"}
+    file=await update.message.document.get_file()
 
-        await update.message.reply_text(
-            "Enter VCF File Name:",
-            reply_markup=ReplyKeyboardMarkup(back_menu, resize_keyboard=True)
-        )
+    await file.download_to_drive("numbers.txt")
 
-        return
+    with open("numbers.txt") as f:
+        numbers=f.read().splitlines()
 
+    files=txt_to_vcf(
+    numbers,
+    context.user_data["contact"],
+    context.user_data["vcfname"],
+    context.user_data["perfile"],
+    context.user_data["count"]
+    )
 
-    if user_id not in user_data_store:
-        return
+    for f in files:
+        await update.message.reply_document(open(f,"rb"))
 
+    return ConversationHandler.END
 
-    step = user_data_store[user_id].get("step")
 
+async def vcf_txt(update,context):
 
-    try:
+    await update.message.reply_text("Send VCF file")
 
-        if step == "contact_name":
 
-            user_data_store[user_id]["contact_name"] = text
-            user_data_store[user_id]["step"] = "vcf_name"
+async def vcf_file(update,context):
 
-            await update.message.reply_text("Enter VCF File Name:")
+    file=await update.message.document.get_file()
 
-            return
+    await file.download_to_drive("contacts.vcf")
 
+    txt=vcf_to_txt("contacts.vcf")
 
-        if step == "vcf_name":
+    await update.message.reply_document(open(txt,"rb"))
 
-            user_data_store[user_id]["vcf_name"] = text
-            user_data_store[user_id]["step"] = "contacts_per_file"
 
-            await update.message.reply_text("Contacts per VCF file?")
+async def numbers(update,context):
 
-            return
+    nums=update.message.text.split()
 
+    vcf=numbers_to_vcf(nums)
 
-        if step == "contacts_per_file":
+    await update.message.reply_document(open(vcf,"rb"))
 
-            user_data_store[user_id]["contacts_per_file"] = int(text)
-            user_data_store[user_id]["step"] = "file_count"
 
-            await update.message.reply_text("How many VCF files?")
+app=ApplicationBuilder().token(config.TOKEN).build()
 
-            return
+conv=ConversationHandler(
 
+entry_points=[MessageHandler(filters.Regex("TXT ➜ VCF"),txt_start)],
 
-        if step == "file_count":
+states={
 
-            user_data_store[user_id]["file_count"] = int(text)
-            user_data_store[user_id]["step"] = "upload_txt"
+CONTACT_NAME:[MessageHandler(filters.TEXT,contact_name)],
 
-            await update.message.reply_text("Send TXT file with numbers.")
+VCF_NAME:[MessageHandler(filters.TEXT,vcf_name)],
 
-            return
+PER_FILE:[MessageHandler(filters.TEXT,per_file)],
 
+FILE_COUNT:[MessageHandler(filters.TEXT,file_count)],
 
-        if step == "numbers_vcf_name":
+TXT_FILE:[MessageHandler(filters.Document.ALL,generate)]
 
-            user_data_store[user_id]["vcf_name"] = text
-            user_data_store[user_id]["step"] = "send_numbers"
+},
 
-            await update.message.reply_text(
-                "Send numbers line by line\nExample:\n919999999999"
-            )
+fallbacks=[]
+)
 
-            return
+app.add_handler(CommandHandler("start",start))
 
+app.add_handler(conv)
 
-        if step == "send_numbers":
+app.add_handler(MessageHandler(filters.Regex("VCF ➜ TXT"),vcf_txt))
 
-            numbers = text.split("\n")
+app.add_handler(MessageHandler(filters.Document.ALL,vcf_file))
 
-            filename = f"{user_id}.vcf"
+app.add_handler(MessageHandler(filters.Regex("Numbers ➜ VCF"),numbers))
 
-            with open(filename, "w") as vcf:
+app.add_handler(CommandHandler("boton",bot_on))
+app.add_handler(CommandHandler("botoff",bot_off))
+app.add_handler(CommandHandler("addadmin",add_admin))
 
-                for i, number in enumerate(numbers):
+print("Bot Running...")
 
-                    number = number.strip()
-
-                    if number == "":
-                        continue
-
-                    vcf.write(
-                        f"BEGIN:VCARD\nVERSION:3.0\nFN:Contact{i+1}\nTEL;TYPE=CELL:{number}\nEND:VCARD\n"
-                    )
-
-            await update.message.reply_document(open(filename, "rb"))
-
-            os.remove(filename)
-
-            await update.message.reply_text("✅ VCF created")
-
-            user_data_store[user_id] = {}
-
-    except:
-
-        await update.message.reply_text("❌ Invalid input")
-
-
-# TXT FILE HANDLER
-async def handle_txt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    user_id = update.message.from_user.id
-
-    if user_data_store.get(user_id, {}).get("step") != "upload_txt":
-        return
-
-    file = await update.message.document.get_file()
-
-    txt_file = f"{user_id}_numbers.txt"
-
-    await file.download_to_drive(txt_file)
-
-    with open(txt_file) as f:
-        numbers = f.read().splitlines()
-
-    data = user_data_store[user_id]
-
-    name = data["contact_name"]
-    per_file = data["contacts_per_file"]
-    count = data["file_count"]
-    vcf_name = data["vcf_name"]
-
-    index = 0
-
-    created_files = []
-
-
-    for i in range(count):
-
-        filename = f"{user_id}_{vcf_name}_{i+1}.vcf"
-
-        with open(filename, "w") as vcf:
-
-            for j in range(per_file):
-
-                if index >= len(numbers):
-                    break
-
-                number = numbers[index].strip()
-
-                if number == "":
-                    index += 1
-                    continue
-
-                vcf.write(
-                    f"BEGIN:VCARD\nVERSION:3.0\nFN:{name}{index+1}\nTEL;TYPE=CELL:{number}\nEND:VCARD\n"
-                )
-
-                index += 1
-
-        created_files.append(filename)
-
-
-    zipname = f"{user_id}_vcf_files.zip"
-
-    with zipfile.ZipFile(zipname, "w") as zipf:
-
-        for file in created_files:
-
-            zipf.write(file)
-
-            os.remove(file)
-
-
-    await update.message.reply_document(open(zipname, "rb"))
-
-    os.remove(zipname)
-    os.remove(txt_file)
-
-    user_data_store[user_id] = {}
-
-    await update.message.reply_text("✅ VCF files generated")
-
-
-# VCF TO TXT FIXED
-async def handle_vcf(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    user_id = update.message.from_user.id
-
-    if user_data_store.get(user_id, {}).get("step") != "vcf_to_txt":
-        return
-
-    file = await update.message.document.get_file()
-
-    vcf_file = f"{user_id}_contacts.vcf"
-
-    await file.download_to_drive(vcf_file)
-
-    numbers = []
-
-    with open(vcf_file, "r", errors="ignore") as f:
-
-        for line in f:
-
-            if line.startswith("TEL"):
-
-                number = line.split(":")[-1].strip()
-
-                numbers.append(number)
-
-
-    txt_file = f"{user_id}_numbers.txt"
-
-    with open(txt_file, "w") as out:
-
-        for n in numbers:
-
-            out.write(n + "\n")
-
-
-    await update.message.reply_document(open(txt_file, "rb"))
-
-    os.remove(txt_file)
-    os.remove(vcf_file)
-
-    user_data_store[user_id] = {}
-
-    await update.message.reply_text("✅ Numbers extracted successfully")
-
-
-# MAIN
-def main():
-
-    app = ApplicationBuilder().token(TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-
-    app.add_handler(MessageHandler(filters.Document.FileExtension("txt"), handle_txt))
-
-    app.add_handler(MessageHandler(filters.Document.FileExtension("vcf"), handle_vcf))
-
-    print("Bot Running...")
-
-    app.run_polling()
-
-
-if __name__ == "__main__":
-    main()
+app.run_polling()
